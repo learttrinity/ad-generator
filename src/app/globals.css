@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  :root {
+    --sidebar-width: 220px;
+  }
+
+  body {
+    @apply bg-surface text-ink antialiased;
+  }
+
+  /* Light area scrollbar */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #D4D3CF;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #B8B7B3;
+  }
+
+  /* Dark sidebar scrollbar */
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: #282828;
+    border-radius: 9999px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+    background: #363636;
+  }
+}
+
+@layer utilities {
+  /* Aspect ratio helpers for ad previews */
+  .aspect-feed {
+    aspect-ratio: 1 / 1;
+  }
+  .aspect-story {
+    aspect-ratio: 9 / 16;
+  }
+
+  /* Text truncation helpers */
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}

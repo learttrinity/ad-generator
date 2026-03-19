@@ -1,0 +1,370 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  role          UserRole  @default(USER)
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts  Account[]
+  sessions  Session[]
+  campaigns Campaign[]     @relation("CreatedBy")
+  runs      GenerationRun[] @relation("TriggeredBy")
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum ClientStatus {
+  AKTIV
+  INAKTIV
+  ARCHIVIERT
+}
+
+enum BrandProfileStatus {
+  ENTWURF
+  IN_PRUEFUNG
+  FREIGEGEBEN
+}
+
+enum CampaignStatus {
+  ENTWURF
+  BEREIT
+  IN_GENERIERUNG
+  ZUR_PRUEFUNG
+  FREIGEGEBEN
+  EXPORTIERT
+  ARCHIVIERT
+}
+
+enum GenerationRunStatus {
+  IN_VORBEREITUNG
+  IN_GENERIERUNG
+  FERTIG
+  FEHLER
+  ABGEBROCHEN
+}
+
+enum CreativeAssetStatus {
+  AUSSTEHEND
+  IN_VORBEREITUNG
+  ANGEFRAGT
+  IN_GENERIERUNG
+  FERTIG
+  FEHLGESCHLAGEN
+  FREIGEGEBEN
+}
+
+enum EnvironmentMode {
+  STANDARD_STUDIO
+  KUNDENSTUDIO_REFERENZ
+}
+
+// Asset types for client brand materials
+enum ClientAssetType {
+  logo
+  logo_alt
+  reference_ad
+  screenshot
+  brand_pdf
+  font
+  social_reference
+  website_reference
+}
+
+// ─── Core Entities ───────────────────────────────────────────────────────────
+
+model Client {
+  id        String       @id @default(cuid())
+  initials  String       @db.VarChar(10)
+  name      String
+  website   String?
+  instagram String?
+  status    ClientStatus @default(AKTIV)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  brandProfile  BrandProfile?
+  campaigns     Campaign[]
+  assets        ClientAsset[]
+  driveMappings ClientDriveMapping[]
+
+  @@map("clients")
+}
+
+model BrandProfile {
+  id       String @id @default(cuid())
+  clientId String @unique
+
+  // Colors
+  primaryColor    String        @default("#000000")
+  secondaryColors Json          @default("[]")
+  accentColors    Json          @default("[]")
+  neutralPalette  Json          @default("[]")
+
+  // Typography
+  fontPrimary           String  @default("")
+  fontSecondary         String?
+  fallbackFontPrimary   String?
+  fallbackFontSecondary String?
+  typographyClass       String?
+
+  // Creative direction
+  visualTone     String?
+  imageTone      String?
+
+  // Structured component rules (replaces free-form JSON for UI usage)
+  // Stored as JSON: { pricingStyle, overlayStyle, logoProminence, borderRadiusStyle, textDensity, urgencyStyle }
+  componentRules Json @default("{}")
+
+  // Structured restrictions
+  // Stored as JSON: { forbiddenColors: [], forbiddenStyles: [], forbiddenWording: [], notes: "" }
+  restrictions Json @default("{\"forbiddenColors\":[],\"forbiddenStyles\":[],\"forbiddenWording\":[],\"notes\":\"\"}")
+
+  // QA state
+  reviewStatus    BrandProfileStatus @default(ENTWURF)
+  approved        Boolean            @default(false)  // derived: true when reviewStatus = FREIGEGEBEN
+  confidenceScore Float              @default(0)       // 0.0 – 1.0
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("brand_profiles")
+}
+
+model ClientAsset {
+  id          String          @id @default(cuid())
+  clientId    String
+  assetType   ClientAssetType
+  fileName    String
+  fileUrl     String          // public path or external URL
+  fileSize    Int?            // bytes
+  mimeType    String?
+  source      String          @default("upload") // "upload" | "drive" | "url"
+  driveFileId String?         // set when source = "drive"
+  metadata    Json            @default("{}")     // extensible: width, height, etc.
+  active      Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("client_assets")
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  clientId        String
+  aworkTaskId     String?
+  title           String
+  offerType       String
+  headline        String?
+  customText      String?        @db.Text
+  abbuchung       String?
+  subheadline     String?
+  urgencyText     String?
+  ctaText         String?
+  locationLine    String?
+  startDate       DateTime?
+  priceNew        Decimal?       @db.Decimal(10, 2)
+  priceOld        Decimal?       @db.Decimal(10, 2)
+  billingInterval String?
+  contractTerm    String?
+  notes           String?        @db.Text
+  status          CampaignStatus @default(ENTWURF)
+  createdById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  client    Client          @relation(fields: [clientId], references: [id])
+  createdBy User?           @relation("CreatedBy", fields: [createdById], references: [id])
+  runs      GenerationRun[]
+
+  @@map("campaigns")
+}
+
+model GenerationRun {
+  id                       String              @id @default(cuid())
+  campaignId               String
+  runNumber                Int
+  directionKey             String?
+  directionSummary         String?             @db.Text
+  directionMode            String              @default("automatisch")
+  environmentMode          EnvironmentMode     @default(STANDARD_STUDIO)
+  messagePriority          String?
+  placements               Json                @default("[]")
+  audienceMatrix           Json                @default("[]")
+  selectedReferenceAssetId String?
+  studioReferenceImageUrl  String?
+  normalizedPayload        Json?
+  warnings                 Json                @default("[]")
+  manualOverrides          Json                @default("{}")
+  status                   GenerationRunStatus @default(IN_VORBEREITUNG)
+  totalAssets              Int                 @default(0)
+  completedAssets          Int                 @default(0)
+  failedAssets             Int                 @default(0)
+  progressPercent          Int                 @default(0)
+  triggeredById            String?
+  startedAt                DateTime?
+  finishedAt               DateTime?
+  errorLog                 String?             @db.Text
+  createdAt                DateTime            @default(now())
+
+  campaign        Campaign         @relation(fields: [campaignId], references: [id])
+  triggeredBy     User?            @relation("TriggeredBy", fields: [triggeredById], references: [id])
+  assets          CreativeAsset[]
+  driveExportLogs DriveExportLog[]
+
+  @@unique([campaignId, runNumber])
+  @@map("generation_runs")
+}
+
+model CreativeAsset {
+  id               String              @id @default(cuid())
+  generationRunId  String
+  audienceKey      String
+  placement        String
+  dimensions       String?             // e.g. "1080x1080"
+  imagePrompt      String?             @db.Text
+  negativePrompt   String?             @db.Text
+  promptBlocks     Json?               // structured blocks used to build the prompt
+  renderSpec       Json                @default("{}")
+  baseImageUrl     String?
+  finalAssetUrl    String?
+  provider         String?             // e.g. "higgsfield", "mock"
+  providerJobId    String?
+  providerResponse Json?               // raw provider response
+  errorMessage     String?             @db.Text
+  // ─── Final render fields ─────────────────────────────────────────
+  renderStatus     String?             // null / "rendering" / "complete" / "failed"
+  renderWarnings   Json                @default("[]")
+  renderedAt       DateTime?
+  finalWidth       Int?
+  finalHeight      Int?
+  status           CreativeAssetStatus @default(AUSSTEHEND)
+  approved         Boolean             @default(false)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  generationRun GenerationRun @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
+
+  @@map("creative_assets")
+}
+
+model FontLibrary {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  classification String
+  fileUrl        String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  @@map("font_library")
+}
+
+// Restricted Google Drive folder mappings per client
+model ClientDriveMapping {
+  id                     String   @id @default(cuid())
+  clientId               String   @unique
+  brandReadFolderId      String?
+  referencesReadFolderId String?
+  campaignsReadFolderId  String?
+  exportWriteFolderId    String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("client_drive_mappings")
+}
+
+// Global key-value store for integration settings (e.g. Drive auth mode)
+model IntegrationSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("integration_settings")
+}
+
+// Tracks every Drive export attempt for a GenerationRun
+model DriveExportLog {
+  id              String   @id @default(cuid())
+  generationRunId String
+  clientId        String
+  driveFolderId   String   // run subfolder created inside export root
+  driveFileIds    Json     @default("[]") // [{assetId, driveFileId, fileName}]
+  status          String   // "success" | "partial" | "failed"
+  assetCount      Int      @default(0)
+  exportedCount   Int      @default(0)
+  errorMessage    String?  @db.Text
+  exportedById    String?
+  exportedAt      DateTime @default(now())
+
+  generationRun GenerationRun @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
+
+  @@map("drive_export_logs")
+}
