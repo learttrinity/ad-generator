@@ -688,15 +688,27 @@ type PanelStyleDNA = 'glass' | 'solid-dark' | 'none' | 'strip'
 type EnergyLevel   = 'high' | 'medium' | 'refined'
 type ColorIntensity = 'aggressive' | 'moderate' | 'subtle'
 
+// IMPORTANT: actual interface shape — use these exact field names when working with DesignDNA
 interface DesignDNA {
-  font: FontKey
-  layout: LayoutKey
-  panelStyle: PanelStyleDNA
-  colorIntensity: ColorIntensity
-  borderRadius: number  // pixels
-  energyLevel: EnergyLevel
+  fontKey: FontKey;              // logical key for font registry
+  fontFamily: string;            // CSS font-family for SVG text (e.g. "Bebas Neue")
+  fontWeight: string;            // "700" for refined, "900" for all others
+  textTransform: 'uppercase' | 'none';  // none only for boutique/minimal tones
+  layoutKey: LayoutKey;
+  panelStyle: PanelStyleDNA;
+  colorIntensity: ColorIntensity;
+  energyLevel: EnergyLevel;
+  borderRadius: number;          // pixels
+  textPosition: 'left' | 'center';  // center only for center-panel layout
 }
 ```
+
+**Important detail on font selection:** `selectFont()` in `dna-resolver.ts` pattern-matches against `typographyClass` string using `.includes()`:
+- contains "condensed" or "sporty" → bebas-neue (high) / barlow-condensed-black (other)
+- contains "elegant" or "serif" → cormorant-garamond (refined) / playfair-display (other)
+- contains "display" → anton
+- contains "geometric" → montserrat-black
+- anything else ("neo-grotesk", etc.) → raleway-extrabold (refined) / montserrat-black (high) / oswald-bold (medium)
 
 ### Layout templates (`src/lib/render/layouts/`)
 All layouts receive `LayoutInput = { spec: RenderSpec, dna: DesignDNA, logo: string | null }` and return an SVG string.
@@ -1050,6 +1062,106 @@ Custom Tailwind tokens defined in `tailwind.config.js`:
 - `shadow-card`, `shadow-card-hover` — card elevation tokens
 
 **Never use:** gray-*, raw blue-*, default tailwind bg-white for content areas, Inter font.
+
+---
+
+## 15. Gotchas & Non-Obvious Rules
+
+### Native modules — never import server libs in client components
+`sharp`, `@resvg/resvg-js`, `pdf-parse`, and `fs` are server-only. They're in `serverComponentsExternalPackages` in `next.config.mjs`. If you accidentally import them in a client component or any file that ships to the browser, the build breaks with a webpack error about `.node` binaries.
+
+### `next.config.mjs` must stay as-is
+```js
+experimental: {
+  serverComponentsExternalPackages: ["@resvg/resvg-js", "sharp", "pdf-parse"],
+}
+```
+And the `webpack.externals` override for `@resvg/resvg-js` on the server. Do not remove these.
+
+### Middleware protects everything
+`src/middleware.ts` uses `next-auth/middleware` and protects all routes **except** `/login`, `/api/auth/*`, `/_next/*`, `/favicon.ico`. Any new public route must be added to the matcher exclusion list.
+
+### Auth: ADMIN check pattern
+In API routes, check role like this:
+```typescript
+const session = await getServerSession(authOptions);
+if (session?.user?.role !== "ADMIN") {
+  return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+}
+```
+
+### Prisma: always `db push`, never `migrate dev`
+`prisma migrate dev` requires interactive input (asks you to name the migration). It will hang in this shell environment. Use `npx prisma db push` for all schema changes.
+
+### DesignDNA field names
+The Prisma model uses `designDnaFont`, `designDnaLayout`, etc. (with `designDna` prefix).
+The `DesignDNA` TypeScript interface uses `fontKey`, `layoutKey`, `panelStyle`, etc. (no prefix, shorter names).
+Don't mix them up — the resolver maps from Prisma fields to the TS interface.
+
+### SVG font rendering — resvg needs font buffers upfront
+`@resvg/resvg-js` cannot load fonts from URLs or system fonts (in most cases). Fonts **must** be passed as `Buffer` via `fontBuffers` in the opts object. The render service loads Oswald Bold + Regular at module init, then loads the DNA-specific font per render. If a font file is missing from `public/fonts/`, the text silently falls back to system Arial.
+
+### JPEG output path
+Generated images are saved to `public/exports/{runId}/{assetId}.jpg` and served as static files at `/exports/{runId}/{assetId}.jpg`. The directory is created automatically by `assetExportService.ts`. Do not move or rename `public/exports/` without updating that service.
+
+### Generation is fire-and-forget
+`POST /api/generator/start` returns `{ runId }` immediately. The pipeline runs in the background with no queue — it's a plain async function launched without `await`. This means if the Next.js process restarts mid-generation, in-progress runs will be stuck at `IN_GENERIERUNG`. There's no recovery mechanism for this.
+
+### Confidence score in DB is stale
+`BrandProfile.confidenceScore` is written by older code and may not reflect current fields. Always use `computeProfileCompleteness(profile)` from `src/lib/brandAnalysis.ts` to get the live score.
+
+### Client search excludes ARCHIVIERT
+`GET /api/kunden/search` always excludes clients with `status = "ARCHIVIERT"`. This is intentional — archived clients shouldn't appear in the generator.
+
+### Google Drive credentials storage
+Drive credentials are stored as encrypted JSON in `IntegrationSetting { key: "google.drive.credentials" }`. The `APP_ENCRYPTION_KEY` env var must be set and consistent — if it changes, previously encrypted values become unreadable.
+
+### Tailwind design tokens — quick reference
+```
+// Content background
+bg-surface                  // #F8F8F7 warm off-white
+
+// Sidebar
+bg-sidebar                  // #0A0A0A
+bg-sidebar-hover            // #141414
+bg-sidebar-active           // #1C1C1C
+border-sidebar-border       // #1F1F1F
+text-sidebar-muted          // #6A6A6A
+text-sidebar-text           // #E8E8E6
+
+// Primary accent (electric blue)
+bg-accent-600               // #2B5EE8  ← primary CTA color
+bg-accent-500               // #3B6EF8
+text-accent-600
+border-accent-200
+
+// Text / ink
+text-ink                    // #1A1A1A  ← primary text
+text-ink-secondary          // #4A4A4A
+text-ink-muted              // #7A7A7A
+text-ink-faint              // #A8A8A6
+
+// Borders
+border-border               // #EBEBEA
+border-border-medium        // #E0DFDB
+border-border-strong        // #C8C7C3
+
+// Semantic
+text-success / bg-success-bg / border-success-border
+text-warning / bg-warning-bg / border-warning-border
+text-danger  / bg-danger-bg  / border-danger-border
+
+// Shadows (use on cards)
+shadow-card
+shadow-card-hover           // apply on hover for lift effect
+shadow-panel                // for modals/overlays
+```
+
+**Rules:**
+- Never use `gray-*`, `blue-*`, `white` (use `surface` for content bg), or `Inter`
+- Page layout: `px-8 py-10 max-w-5xl space-y-8`
+- Admin panel: `max-w-6xl`
+- Cards: `bg-white rounded-xl shadow-card` with `hover:shadow-card-hover` transition
 
 ---
 
